@@ -23,7 +23,7 @@ class Item(BaseModel):
 
 @app.get("/", tags=["Root"])
 async def read_root():
-    return {"message": "Welcome to the API v.3"}
+    return {"message": "Welcome to the API v.4"}
 
 
 @app.get("/items/{item_id}")
