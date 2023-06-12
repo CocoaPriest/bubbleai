@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 
-class Item(BaseModel):
+class File(BaseModel):
     name: str
     price: float
     is_offer: bool | None = None
@@ -31,6 +31,6 @@ def get_item(item_id: int, q: str | None = None):
     return {"item_id": item_id, "q": q}
 
 
-@app.put("/items/{item_id}")
-def update_item(item_id: int, item: Item):
-    return {"item_name": item.name, "item_id": item_id, "item_price": item.price}
+@app.put("/ingest/{document_hash}")
+def ingest(document_hash: str, file: File):
+    return {"file_name": file.name, "document_hash": document_hash}
