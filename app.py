@@ -24,7 +24,12 @@ class File(BaseModel):
 
 @app.get("/", tags=["Root"])
 async def read_root():
-    return {"message": "Welcome to the API v.8"}
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=80, chunk_overlap=20)
+    chunks = text_splitter.split_text(
+        "Disparate impact in United States labor law refers to practices in employment, housing, and other areas that adversely affect one group of people of a protected characteristic more than another, even though rules applied by employers or landlords are formally neutral. Although the protected classes vary by statute, most federal civil rights laws protect based on race, color, religion, national origin, and sex as protected traits, and some laws include disability status and other traits as well."
+    )
+
+    return {"message": chunks}
 
 
 @app.get("/items/{item_id}")
