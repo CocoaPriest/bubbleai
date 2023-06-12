@@ -3,3 +3,8 @@ os: linux
 files:
     - source: /
       destination: /home/ubuntu/bubbleai
+hooks:
+    AfterInstall:
+        - location: scripts/after_install.sh
+          timeout: 300
+          runas: root
