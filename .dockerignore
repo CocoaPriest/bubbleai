@@ -1,9 +1,0 @@
-.git
-.gitignore
-__pycache__
-*.log
-*.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
