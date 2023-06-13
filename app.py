@@ -26,7 +26,7 @@ class File(BaseModel):
 async def read_root():
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=80, chunk_overlap=20)
     chunks = text_splitter.split_text(
-        "Disparate impact in United States labor law refers to practices in employment, housing, and other areas that adversely affect one group of people of a protected characteristic more than another, even though rules applied by employers or landlords are formally neutral. Although the protected classes vary by statute, most federal civil rights laws protect based on race, color, religion, national origin, and sex as protected traits, and some laws include disability status and other traits as well."
+        "ha: Disparate impact in United States labor law refers to practices in employment, housing, and other areas that adversely affect one group of people of a protected characteristic more than another, even though rules applied by employers or landlords are formally neutral. Although the protected classes vary by statute, most federal civil rights laws protect based on race, color, religion, national origin, and sex as protected traits, and some laws include disability status and other traits as well."
     )
 
     return {"message": chunks}
@@ -38,11 +38,15 @@ def get_item(item_id: int, q: str | None = None):
 
 
 # chunk and prepare with langchain
-# send it to beam.cloud ("document_hash", "chunks" array)
+# save it to s3 (even before working with langchain?)
 @app.put("/ingest/{document_hash}")
 def ingest(document_hash: str, file: File):
     return {"file_name": file.name, "document_hash": document_hash}
 
+
+# if s3 detects new files, it should make a beam.cloud call ("document_hash", "chunks" array)
+# beam works with a webhook, saves complete data back to s3.
+# new func here that checks for done embeddings on s3.
 
 # TODO: pull embeddings from beam.cloud
 # TODO: saves to chroma/other db
