@@ -6,10 +6,10 @@ files:
 hooks:
     # You can use this deployment lifecycle event for tasks such as configuring
     # your application or changing file permissions.
-    AfterInstall:
-        - location: scripts/after_install.sh
-          timeout: 300
-          runas: root
+    # AfterInstall:
+    #     - location: scripts/after_install.sh
+    #       timeout: 600 # it may take too long
+    #       runas: root
 
     # You typically use this deployment lifecycle event to restart services that
     # were stopped during ApplicationStop
