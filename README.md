@@ -28,3 +28,5 @@ This calls the `aws deploy` command (AWS CodeDeploy), which uses the latest comm
 ### TODO
 
 -   start `gunicorn` on boot [use this?](https://www.linode.com/community/questions/18473/how-do-i-ensure-that-gunicorn-starts-upon-boot)
+
+# ps aux | grep gunicorn | awk '{ print $2 }' | xargs kill -HUP
