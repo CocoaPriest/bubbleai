@@ -18,15 +18,22 @@ ssh -i ~/.ssh/fastapi_key.pem ubuntu@ec2-3-121-186-17.eu-central-1.compute.amazo
 
 `sudo vim /etc/nginx/sites-enabled/fastapi_nginx`
 
-### Deploy
+## Docker on ec2
 
-`make deploy`
+#### Pull
 
-This calls the `aws deploy` command (AWS CodeDeploy), which uses the latest commitId on the `main` branch.
-`appspec.yml` file is used to call the `scripts/after_install.sh` script that restarts the server (sends `HUP` signal to `gunicorn`)
+`docker pull 246532218018.dkr.ecr.eu-central-1.amazonaws.com/fastapi-bubble:latest`
 
-### TODO
+#### Run
 
--   start `gunicorn` on boot [use this?](https://www.linode.com/community/questions/18473/how-do-i-ensure-that-gunicorn-starts-upon-boot)
+`docker run -t -p 80:8000 246532218018.dkr.ecr.eu-central-1.amazonaws.com/fastapi-bubble:latest`
 
-# ps aux | grep gunicorn | awk '{ print $2 }' | xargs kill -HUP
+#### Login into
+
+`docker exec -it [name/id] /bin/bash`
+
+#### Other
+
+-   docker ps
+-   docker stop ...
+-   docker rm ...
