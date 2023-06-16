@@ -36,7 +36,7 @@ async def read_root():
     logger.info("Calling root")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=80, chunk_overlap=20)
     chunks = text_splitter.split_text(
-        "4: Disparate impact in United States labor law refers to practices in employment, housing, and other areas that adversely affect one group of people of a protected characteristic more than another, even though rules applied by employers or landlords are formally neutral. Although the protected classes vary by statute, most federal civil rights laws protect based on race, color, religion, national origin, and sex as protected traits, and some laws include disability status and other traits as well."
+        "Disparate impact in United States labor law refers to practices in employment, housing, and other areas that adversely affect one group of people of a protected characteristic more than another, even though rules applied by employers or landlords are formally neutral. Although the protected classes vary by statute, most federal civil rights laws protect based on race, color, religion, national origin, and sex as protected traits, and some laws include disability status and other traits as well."
     )
 
     return {"message": chunks}
