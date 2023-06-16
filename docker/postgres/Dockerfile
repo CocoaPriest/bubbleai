@@ -1,3 +1,1 @@
-ARG POSTGRES_BASE_IMAGE=postgres:13.7-bullseye
-
-FROM ${POSTGRES_BASE_IMAGE}
+FROM ankane/pgvector:latest

@@ -177,3 +177,6 @@ pyrightconfig.json
 
 # qdrant
 qdrant_storage/
+
+# postgres
+postgres_storage/
