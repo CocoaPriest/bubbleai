@@ -2,6 +2,15 @@ from pydantic import BaseModel
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+import logging
+
+c_handler = logging.StreamHandler()
+c_format = logging.Formatter("%(name)s [%(levelname)s]: %(message)s")
+c_handler.setFormatter(c_format)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(c_handler)
 
 app = FastAPI()
 
@@ -24,9 +33,10 @@ class File(BaseModel):
 
 @app.get("/", tags=["Root"])
 async def read_root():
+    logger.info("Calling root")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=80, chunk_overlap=20)
     chunks = text_splitter.split_text(
-        "3: Disparate impact in United States labor law refers to practices in employment, housing, and other areas that adversely affect one group of people of a protected characteristic more than another, even though rules applied by employers or landlords are formally neutral. Although the protected classes vary by statute, most federal civil rights laws protect based on race, color, religion, national origin, and sex as protected traits, and some laws include disability status and other traits as well."
+        "4: Disparate impact in United States labor law refers to practices in employment, housing, and other areas that adversely affect one group of people of a protected characteristic more than another, even though rules applied by employers or landlords are formally neutral. Although the protected classes vary by statute, most federal civil rights laws protect based on race, color, religion, national origin, and sex as protected traits, and some laws include disability status and other traits as well."
     )
 
     return {"message": chunks}
