@@ -80,8 +80,6 @@ def ingest(
     machine_id: Annotated[str, Form()],
 ):
     s3 = boto3.resource("s3")
-    # buckets = [bucket.name for bucket in s3.buckets.all()]
-    # logger.info("Bucket List: %s" % buckets)
 
     # TODO: get from JWT
     client_id = uuid.UUID(int=0)

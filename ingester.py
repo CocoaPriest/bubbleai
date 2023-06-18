@@ -5,6 +5,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores.pgvector import PGVector, DistanceStrategy
+from langchain.docstore.document import Document
+from typing import List
 
 # from psycopg.conninfo import make_conninfo
 
@@ -55,7 +57,10 @@ def receive_messages_from_sqs_in_batches(queue_url):
         if "Messages" in response:
             for message in response["Messages"]:
                 # Process the message
-                process_message(message)
+                print(f"message type: {type(message)}")
+                documents = load_documents(message)
+                chunks = split_documents(documents)
+                persist(chunks)
 
                 # Delete the message from the queue
                 sqs.delete_message(
@@ -64,7 +69,7 @@ def receive_messages_from_sqs_in_batches(queue_url):
                 print(f"=> SQS message deleted")
 
 
-def process_message(message):
+def load_documents(message: any) -> List[Document]:
     content = json.loads(message["Body"])
 
     # Get S3 object details from the S3 event
@@ -73,14 +78,24 @@ def process_message(message):
 
     print(f"=> Processing bucket {bucket}, key: {key}")
 
+    # TODO: no, looks like I have to load files manually with boto3,
+    # just to be flexible with docuemnt loaders.
+    # also, to read file's metadata like file_path
     loader = S3FileLoader(bucket, key)
     documents = loader.load()
     print(f"=> Document:\n {documents}")
 
+    return documents
+
+
+def split_documents(documents: List[Document]) -> List[Document]:
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=80, chunk_overlap=20)
     chunks = text_splitter.split_documents(documents)
     print(f"=> Chunks:\n {len(chunks)}")
+    return chunks
 
+
+def persist(chunks: List[Document]):
     print("=> Saving to postgres...")
 
     db = PGVector.from_documents(
