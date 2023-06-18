@@ -20,3 +20,7 @@ docker_up:
 
 docker_down:
 	docker compose -f docker-compose-local.yml down
+
+dev:
+	uvicorn app:app --reload
+	
