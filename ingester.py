@@ -79,7 +79,7 @@ def load_documents(message: any) -> List[Document]:
     print(f"=> Processing bucket {bucket}, key: {key}")
 
     # TODO: no, looks like I have to load files manually with boto3,
-    # just to be flexible with docuemnt loaders.
+    # just to be flexible with docuemnt loaders. First, check it in a notebook!
     # also, to read file's metadata like file_path
     loader = S3FileLoader(bucket, key)
     documents = loader.load()
