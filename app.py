@@ -2,23 +2,14 @@ from pydantic import BaseModel
 from fastapi import FastAPI, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-import logging
 from dotenv import load_dotenv
 from typing import Annotated
+from logger import logger
 import boto3
 import uuid
 import os
 
 load_dotenv()
-
-c_handler = logging.StreamHandler()
-c_format = logging.Formatter("%(name)s [%(levelname)s]: %(message)s")
-c_handler.setFormatter(c_format)
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-logger.addHandler(c_handler)
-
 
 os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
@@ -84,7 +75,7 @@ def ingest(
     # TODO: get from JWT
     client_id = uuid.UUID(int=0)
 
-    logger.info(f"=> uploading file to s3: `{file.filename}`")
+    logger.info(f"uploading file to s3: `{file.filename}`")
 
     ret = s3.Bucket("bubbleai.uploads").put_object(
         Key=f"{client_id}/{uuid.uuid4()}",
@@ -92,7 +83,7 @@ def ingest(
         ContentType=file.content_type,
         Metadata={"full_path": full_path, "machine_id": machine_id},
     )
-    logger.info(f"=> s3 object created: {ret.key}")
+    logger.info(f"s3 object created: {ret.key}")
     return {
         "file_name": file.filename,
         "content_type": file.content_type,

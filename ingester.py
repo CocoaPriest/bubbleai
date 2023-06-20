@@ -1,5 +1,6 @@
 import boto3
 import json
+from logger import logger
 from langchain.document_loaders import S3FileLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
@@ -41,7 +42,7 @@ connection_string = make_conninfo(
     password=os.getenv("DB_PASSWORD"),
 )
 
-print(f"=> postgres connection: {connection_string}")
+logger.info(f"postgres connection: {connection_string}")
 
 
 def receive_messages_from_sqs_in_batches(queue_url):
@@ -66,7 +67,7 @@ def receive_messages_from_sqs_in_batches(queue_url):
         if "Messages" in response:
             for message in response["Messages"]:
                 # Process the message
-                print(f"message type: {type(message)}")
+                logger.info(f"message type: {type(message)}")
                 documents = load_documents(message)
                 chunks = split_documents(documents)
 
@@ -77,13 +78,13 @@ def receive_messages_from_sqs_in_batches(queue_url):
                 try:
                     persist(zipped, "machine_id", "full_path")  # TODO
                 except:
-                    print(f"=> not gonna delete SQS message")
+                    logger.info(f"not gonna delete SQS message")
                 else:
                     # Delete the message from the queue
                     sqs.delete_message(
                         QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
                     )
-                    print(f"=> SQS message deleted")
+                    logger.info(f"SQS message deleted")
                     # TODO: delete file from s3
 
 
@@ -94,14 +95,14 @@ def load_documents(message: any) -> List[Document]:
     bucket = content["Records"][0]["s3"]["bucket"]["name"]
     key = content["Records"][0]["s3"]["object"]["key"]
 
-    print(f"=> Processing bucket {bucket}, key: {key}")
+    logger.info(f"Processing bucket {bucket}, key: {key}")
 
     # TODO: no, looks like I have to load files manually with boto3,
     # just to be flexible with docuemnt loaders. First, check it in a notebook!
     # also, to read file's metadata like file_path
     loader = S3FileLoader(bucket, key)
     documents = loader.load()
-    print(f"=> Document:\n {documents}")
+    logger.info(f"Document:\n{documents}")
 
     return documents
 
@@ -109,29 +110,61 @@ def load_documents(message: any) -> List[Document]:
 def split_documents(documents: List[Document]) -> List[Document]:
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=20)
     chunks = text_splitter.split_documents(documents)
-    print(f"=> Chunks:\n {len(chunks)}")
+    logger.info(f"Number of chunks: {len(chunks)}")
     return chunks
 
 
+# GPT4:
+# Your code is adding inserts into the database within the loop one by one. Since you're seeking
+# to perform a batch insert instead of a looped, one-by-one insert, you could use the `executemany`
+# command from the psycopg2 library. Here's how you might modify your code to achieve this:
+
+# ```python
+# with psycopg.connect(connection_string) as conn:
+#     register_vector(conn)
+
+#     # Prepare data for batch insert
+#     data = [(vector, text, machine_id, full_path) for text, vector in zipped]
+
+#     insert_query = """
+#         INSERT INTO documents (embedding, text, machine_id, full_path)
+#         VALUES (%s, %s, %s, %s)
+#     """
+
+#     # Execute the batch insert
+#     with conn.cursor() as cur:
+#         cur.executemany(insert_query, data)
+
+#     conn.commit()
+# ```
+
+# Here, `data` is a list of tuples where each tuple corresponds to a row to be inserted.
+# The `executemany` function is able to take this list and perform a batch insert, which can be
+# more efficient than separate insert commands.
+
+# Please note that this form of batch insertion is preferred when you're sure that your list
+# of data isn't huge.
+
+
 def persist(zipped: List[Tuple[str, List[float]]], machine_id: str, full_path: str):
-    print("=> Saving to postgres...")
+    logger.info("Saving to postgres...")
 
     try:
         with psycopg.connect(connection_string) as conn:
             register_vector(conn)
 
-            # TODO: batch insert
+            # TODO: batch insert with asyncpg
             for text, vector in zipped:
                 insert_query = "INSERT INTO documents (embedding, text, machine_id, full_path) VALUES (%s, %s, %s, %s)"
                 conn.execute(insert_query, (vector, text, machine_id, full_path))
             conn.commit()
     except psycopg.Error as e:
-        print(f"An error occurred: {e}")
+        logger.info(f"An error occurred: {e}")
         raise
 
 
 # Replace with your queue URL
 queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest"
 
-print(f"=> running ingester for SQS: `{queue_url}`")
+logger.info(f"running ingester for SQS: `{queue_url}`")
 receive_messages_from_sqs_in_batches(queue_url)
