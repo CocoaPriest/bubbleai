@@ -26,7 +26,7 @@ os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
 os.environ["AWS_REGION"] = os.getenv("aws_region")
 
-s3client = boto3.client("s3")
+s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
 embeddings = OpenAIEmbeddings()
@@ -61,8 +61,13 @@ def receive_messages_from_sqs_in_batches(queue_url):
         if "Messages" in response:
             for message in response["Messages"]:
                 # Process the message
-                logger.info(f"message type: {type(message)}")
-                document = load_document(message)
+                content = json.loads(message["Body"])
+
+                # Get S3 object details from the S3 event
+                bucket = content["Records"][0]["s3"]["bucket"]["name"]
+                key = content["Records"][0]["s3"]["object"]["key"]
+
+                document = load_document(bucket, key)
                 chunks = split_document(document)
                 texts = [chunk.page_content for chunk in chunks]
                 logger.info(f"chunks:\n{chunks}")
@@ -70,10 +75,9 @@ def receive_messages_from_sqs_in_batches(queue_url):
                 vectors = embeddings.embed_documents(texts)
                 zipped = zip(texts, vectors)
 
+                # LATER: optimize try block. AWS errors not handled
                 try:
-                    logger.info(f"Document metadata:\n{document.metadata}")
-                    raise
-                    persist(zipped, document.metadata)  # TODO
+                    persist(zipped, document.metadata)
                 except:
                     logger.info(f"not gonna delete SQS message")
                 else:
@@ -82,16 +86,12 @@ def receive_messages_from_sqs_in_batches(queue_url):
                         QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
                     )
                     logger.info(f"SQS message deleted")
-                    # TODO: delete file from s3
+
+                    s3.delete_object(Bucket=bucket, Key=key)
+                    logger.info(f"s3 file deleted")
 
 
-def load_document(message: any) -> Document:
-    content = json.loads(message["Body"])
-
-    # Get S3 object details from the S3 event
-    bucket = content["Records"][0]["s3"]["bucket"]["name"]
-    key = content["Records"][0]["s3"]["object"]["key"]
-
+def load_document(bucket: str, key: str) -> Document:
     logger.info(f"Processing bucket {bucket}, key: {key}")
 
     # I have to load files manually with boto3,
@@ -100,7 +100,7 @@ def load_document(message: any) -> Document:
         file_path = f"{temp_dir}/{key}"
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         try:
-            s3client.download_file(bucket, key, file_path)
+            s3.download_file(bucket, key, file_path)
             logger.info(f"File {key} has been downloaded successfully to {file_path}")
 
             s3metadata = get_s3metadata(bucket, key)
@@ -130,7 +130,7 @@ def get_elements(file_path, content_type) -> List[Element]:
 
 def get_s3metadata(bucket, key):
     # Head the object
-    response = s3client.head_object(Bucket=bucket, Key=key)
+    response = s3.head_object(Bucket=bucket, Key=key)
 
     # The 'Metadata' field is a dictionary of the user metadata
     metadata = response["Metadata"]
@@ -189,6 +189,14 @@ def persist(
     full_path = metadata["full_path"]
     content_type = metadata["content_type"]
 
+    machine_id, full_path, content_type = map(
+        clean_null_bytes, [machine_id, full_path, content_type]
+    )
+
+    logger.info(f"machine_id: {machine_id}")
+    logger.info(f"full_path: {full_path}")
+    logger.info(f"content_type: {content_type}")
+
     try:
         with psycopg.connect(connection_string) as conn:
             register_vector(conn)
@@ -196,12 +204,20 @@ def persist(
             # TODO: normalize: use a separate table for documents and chunks
             # TODO: batch insert with asyncpg
             for text, vector in zipped:
+                text = clean_null_bytes(text)
                 insert_query = "INSERT INTO documents (embedding, text, machine_id, full_path) VALUES (%s, %s, %s, %s)"
                 conn.execute(insert_query, (vector, text, machine_id, full_path))
             conn.commit()
     except psycopg.Error as e:
         logger.error(f"An error occurred: {e}")
         raise
+
+
+def clean_null_bytes(field):
+    """
+    This function removes any null bytes from a string field. Otherwise we get an error from postgres
+    """
+    return field.replace("\0", "")
 
 
 # Replace with your queue URL
