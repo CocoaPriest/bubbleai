@@ -1,21 +1,15 @@
 import boto3
 import json
+import tempfile
+import os
 from logger import logger
-from langchain.document_loaders import S3FileLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from dotenv import load_dotenv
 from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores.pgvector import PGVector, DistanceStrategy
 from langchain.docstore.document import Document
+from dotenv import load_dotenv
 from typing import List, Tuple, Dict
 from unstructured.partition.pdf import partition_pdf
 from unstructured.documents.elements import Element
-import tempfile
-
-from psycopg.conninfo import make_conninfo
-
-import os
-import numpy as np
 import psycopg
 from pgvector.psycopg import register_vector
 
@@ -24,22 +18,19 @@ load_dotenv()
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
-os.environ["AWS_REGION"] = os.getenv("aws_region")
+os.environ["AWS_DEFAULT_REGION"] = os.getenv("aws_region")
+
+if os.environ.get("DATABASE_URL") is None:
+    connection_string = os.getenv("DATABASE_URL")
+else:
+    connection_string = os.environ["DATABASE_URL"]
+
+logger.info(f"postgres connection: {connection_string}")
 
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
 embeddings = OpenAIEmbeddings()
-
-connection_string = make_conninfo(
-    host=os.getenv("DB_HOST"),
-    port=os.getenv("DB_PORT"),
-    dbname=os.getenv("DB_DATABASE"),
-    user=os.getenv("DB_USER"),
-    password=os.getenv("DB_PASSWORD"),
-)
-
-logger.info(f"postgres connection: {connection_string}")
 
 
 def receive_messages_from_sqs_in_batches(queue_url):
@@ -121,7 +112,8 @@ def load_document(bucket: str, key: str) -> Document:
 def get_elements(file_path, content_type) -> List[Element]:
     # not using auto, arguments: https://unstructured-io.github.io/unstructured/bricks.html
     if content_type == "application/pdf":
-        # other `strategy` options produce worse results
+        # TODO: try again other `strategy` values, because some documents produce bad resuls, like:
+        # /Users/kostik/Documents/neu_20200122_kuendigungs-_aenderungsantrag_digital.pdf
         return partition_pdf(file_path, strategy="fast")
     else:
         logger.error(f"Unknown content_type: {content_type}")
@@ -185,17 +177,11 @@ def persist(
     metadata: Dict[str, str],
 ):
     logger.info("Saving to postgres...")
-    machine_id = metadata["machine_id"]
-    full_path = metadata["full_path"]
-    content_type = metadata["content_type"]
 
     machine_id, full_path, content_type = map(
-        clean_null_bytes, [machine_id, full_path, content_type]
+        clean_null_bytes,
+        [metadata["machine_id"], metadata["full_path"], metadata["content_type"]],
     )
-
-    logger.info(f"machine_id: {machine_id}")
-    logger.info(f"full_path: {full_path}")
-    logger.info(f"content_type: {content_type}")
 
     try:
         with psycopg.connect(connection_string) as conn:
