@@ -8,6 +8,8 @@ from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores.pgvector import PGVector, DistanceStrategy
 from langchain.docstore.document import Document
 from typing import List, Tuple
+from unstructured.partition.pdf import partition_pdf
+import tempfile
 
 from psycopg.conninfo import make_conninfo
 
@@ -22,6 +24,8 @@ os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
 os.environ["AWS_REGION"] = os.getenv("aws_region")
+
+s3client = boto3.client("s3")
 
 embeddings = OpenAIEmbeddings()
 
@@ -69,6 +73,7 @@ def receive_messages_from_sqs_in_batches(queue_url):
                 # Process the message
                 logger.info(f"message type: {type(message)}")
                 documents = load_documents(message)
+                return
                 chunks = split_documents(documents)
 
                 texts = [chunk.page_content for chunk in chunks]
@@ -100,11 +105,46 @@ def load_documents(message: any) -> List[Document]:
     # TODO: no, looks like I have to load files manually with boto3,
     # just to be flexible with docuemnt loaders. First, check it in a notebook!
     # also, to read file's metadata like file_path
-    loader = S3FileLoader(bucket, key)
-    documents = loader.load()
-    logger.info(f"Document:\n{documents}")
 
-    return documents
+    # TODO: use just one s3client above
+    s3 = boto3.resource("s3")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        file_path = f"{temp_dir}/{key}"
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        try:
+            s3.Bucket(bucket).download_file(key, file_path)
+            logger.info(f"File {key} has been downloaded successfully to {file_path}")
+
+            # Returns a List[Element] present in the pages of the parsed pdf document
+            # TODO: other file types, word! Is there an "auto" type?
+            elements = partition_pdf(file_path)
+            text = "\n\n".join([str(el) for el in elements])
+
+            s3metadata = get_s3metadata(bucket, key)
+            source = f"{s3metadata['machine_id']}:{s3metadata['full_path']}"
+            # print(f"->>> {s3metadata}")
+            metadata = {"source": source}
+
+            docs: List[Document] = list()
+            docs = [Document(page_content=text, metadata=metadata)]
+            logger.info(f"Documents:\n{docs}")
+
+            return docs
+
+        except Exception as e:
+            logger.error(
+                f"There was an error while downloading the file {key} from the bucket {bucket}."
+            )
+            logger.error(f"{e}")
+
+
+def get_s3metadata(bucket, key):
+    # Head the object
+    response = s3client.head_object(Bucket=bucket, Key=key)
+
+    # The 'Metadata' field is a dictionary of the user metadata
+    metadata = response["Metadata"]
+    return metadata
 
 
 def split_documents(documents: List[Document]) -> List[Document]:
