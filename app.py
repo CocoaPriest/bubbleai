@@ -13,7 +13,7 @@ load_dotenv()
 
 os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
-os.environ["AWS_REGION"] = os.getenv("aws_region")
+os.environ["AWS_DEFAULT_REGION"] = os.getenv("aws_region")
 
 app = FastAPI(title="BubbleAI")
 

@@ -24,6 +24,13 @@ services:
         platform: ${PLATFORM}
         ports:
             - "8000:8000"
+
+    ingester:
+        container_name: ingester
+        build:
+            dockerfile: docker/ingester/Dockerfile
+        image: 246532218018.dkr.ecr.eu-central-1.amazonaws.com/ingester-bubble:latest
+        platform: ${PLATFORM}
         depends_on:
             - db
         environment:

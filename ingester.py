@@ -206,8 +206,8 @@ def clean_null_bytes(field):
     return field.replace("\0", "")
 
 
-# Replace with your queue URL
-queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest"
+if __name__ == "__main__":
+    queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest"
 
-logger.info(f"running ingester for SQS: `{queue_url}`")
-receive_messages_from_sqs_in_batches(queue_url)
+    logger.info(f"running ingester for SQS: `{queue_url}`")
+    receive_messages_from_sqs_in_batches(queue_url)
