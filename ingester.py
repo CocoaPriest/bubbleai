@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.vectorstores.pgvector import PGVector, DistanceStrategy
 from langchain.docstore.document import Document
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from unstructured.partition.pdf import partition_pdf
 from unstructured.documents.elements import Element
 import tempfile
@@ -27,17 +27,9 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
 os.environ["AWS_REGION"] = os.getenv("aws_region")
 
 s3client = boto3.client("s3")
+sqs = boto3.client("sqs")
 
 embeddings = OpenAIEmbeddings()
-
-# connection_string = PGVector.connection_string_from_db_params(
-#     driver=os.environ.get("DB_DRIVER", "psycopg"),
-#     host=os.getenv("DB_HOST"),
-#     port=os.getenv("DB_PORT"),
-#     database=os.getenv("DB_DATABASE"),
-#     user=os.getenv("DB_USER"),
-#     password=os.getenv("DB_PASSWORD"),
-# )
 
 connection_string = make_conninfo(
     host=os.getenv("DB_HOST"),
@@ -51,9 +43,6 @@ logger.info(f"postgres connection: {connection_string}")
 
 
 def receive_messages_from_sqs_in_batches(queue_url):
-    # Create SQS client
-    sqs = boto3.client("sqs")
-
     # Implement the long polling mechanism
     while True:
         response = sqs.receive_message(
@@ -73,16 +62,18 @@ def receive_messages_from_sqs_in_batches(queue_url):
             for message in response["Messages"]:
                 # Process the message
                 logger.info(f"message type: {type(message)}")
-                documents = load_documents(message)
-                return
-                chunks = split_documents(documents)
-
+                document = load_document(message)
+                chunks = split_document(document)
                 texts = [chunk.page_content for chunk in chunks]
+                logger.info(f"chunks:\n{chunks}")
+
                 vectors = embeddings.embed_documents(texts)
                 zipped = zip(texts, vectors)
 
                 try:
-                    persist(zipped, "machine_id", "full_path")  # TODO
+                    logger.info(f"Document metadata:\n{document.metadata}")
+                    raise
+                    persist(zipped, document.metadata)  # TODO
                 except:
                     logger.info(f"not gonna delete SQS message")
                 else:
@@ -94,7 +85,7 @@ def receive_messages_from_sqs_in_batches(queue_url):
                     # TODO: delete file from s3
 
 
-def load_documents(message: any) -> List[Document]:
+def load_document(message: any) -> Document:
     content = json.loads(message["Body"])
 
     # Get S3 object details from the S3 event
@@ -113,17 +104,12 @@ def load_documents(message: any) -> List[Document]:
             logger.info(f"File {key} has been downloaded successfully to {file_path}")
 
             s3metadata = get_s3metadata(bucket, key)
-            source = f"{s3metadata['machine_id']}:{s3metadata['full_path']}"
-            metadata = {"source": source}
-
-            elements = get_elements(file_path, s3metadata["ContentType"])
+            elements = get_elements(file_path, s3metadata["content_type"])
             text = "\n\n".join([str(el) for el in elements])
 
-            docs: List[Document] = list()
-            docs = [Document(page_content=text, metadata=metadata)]
-            logger.info(f"Documents:\n{docs}")
+            doc = Document(page_content=text, metadata=s3metadata)
 
-            return docs
+            return doc
 
         except Exception as e:
             logger.error(
@@ -148,14 +134,16 @@ def get_s3metadata(bucket, key):
 
     # The 'Metadata' field is a dictionary of the user metadata
     metadata = response["Metadata"]
-    metadata["ContentType"] = response["ContentType"]
+    metadata["content_type"] = response["ContentType"]
     logger.info(f"metadata:\n{metadata}")
     return metadata
 
 
-def split_documents(documents: List[Document]) -> List[Document]:
+def split_document(document: Document) -> List[Document]:
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=20)
-    chunks = text_splitter.split_documents(documents)
+    docs: List[Document] = list()
+    docs = [document]
+    chunks = text_splitter.split_documents(docs)
     logger.info(f"Number of chunks: {len(chunks)}")
     return chunks
 
@@ -192,13 +180,20 @@ def split_documents(documents: List[Document]) -> List[Document]:
 # of data isn't huge.
 
 
-def persist(zipped: List[Tuple[str, List[float]]], machine_id: str, full_path: str):
+def persist(
+    zipped: List[Tuple[str, List[float]]],
+    metadata: Dict[str, str],
+):
     logger.info("Saving to postgres...")
+    machine_id = metadata["machine_id"]
+    full_path = metadata["full_path"]
+    content_type = metadata["content_type"]
 
     try:
         with psycopg.connect(connection_string) as conn:
             register_vector(conn)
 
+            # TODO: normalize: use a separate table for documents and chunks
             # TODO: batch insert with asyncpg
             for text, vector in zipped:
                 insert_query = "INSERT INTO documents (embedding, text, machine_id, full_path) VALUES (%s, %s, %s, %s)"
