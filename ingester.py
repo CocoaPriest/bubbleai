@@ -9,6 +9,7 @@ from langchain.vectorstores.pgvector import PGVector, DistanceStrategy
 from langchain.docstore.document import Document
 from typing import List, Tuple
 from unstructured.partition.pdf import partition_pdf
+from unstructured.documents.elements import Element
 import tempfile
 
 from psycopg.conninfo import make_conninfo
@@ -102,28 +103,21 @@ def load_documents(message: any) -> List[Document]:
 
     logger.info(f"Processing bucket {bucket}, key: {key}")
 
-    # TODO: no, looks like I have to load files manually with boto3,
-    # just to be flexible with docuemnt loaders. First, check it in a notebook!
-    # also, to read file's metadata like file_path
-
-    # TODO: use just one s3client above
-    s3 = boto3.resource("s3")
+    # I have to load files manually with boto3,
+    # just to be flexible with docuemnt loaders.
     with tempfile.TemporaryDirectory() as temp_dir:
         file_path = f"{temp_dir}/{key}"
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         try:
-            s3.Bucket(bucket).download_file(key, file_path)
+            s3client.download_file(bucket, key, file_path)
             logger.info(f"File {key} has been downloaded successfully to {file_path}")
-
-            # Returns a List[Element] present in the pages of the parsed pdf document
-            # TODO: other file types, word! Is there an "auto" type?
-            elements = partition_pdf(file_path)
-            text = "\n\n".join([str(el) for el in elements])
 
             s3metadata = get_s3metadata(bucket, key)
             source = f"{s3metadata['machine_id']}:{s3metadata['full_path']}"
-            # print(f"->>> {s3metadata}")
             metadata = {"source": source}
+
+            elements = get_elements(file_path, s3metadata["ContentType"])
+            text = "\n\n".join([str(el) for el in elements])
 
             docs: List[Document] = list()
             docs = [Document(page_content=text, metadata=metadata)]
@@ -138,12 +132,24 @@ def load_documents(message: any) -> List[Document]:
             logger.error(f"{e}")
 
 
+def get_elements(file_path, content_type) -> List[Element]:
+    # not using auto, arguments: https://unstructured-io.github.io/unstructured/bricks.html
+    if content_type == "application/pdf":
+        # other `strategy` options produce worse results
+        return partition_pdf(file_path, strategy="fast")
+    else:
+        logger.error(f"Unknown content_type: {content_type}")
+        raise
+
+
 def get_s3metadata(bucket, key):
     # Head the object
     response = s3client.head_object(Bucket=bucket, Key=key)
 
     # The 'Metadata' field is a dictionary of the user metadata
     metadata = response["Metadata"]
+    metadata["ContentType"] = response["ContentType"]
+    logger.info(f"metadata:\n{metadata}")
     return metadata
 
 
@@ -199,7 +205,7 @@ def persist(zipped: List[Tuple[str, List[float]]], machine_id: str, full_path: s
                 conn.execute(insert_query, (vector, text, machine_id, full_path))
             conn.commit()
     except psycopg.Error as e:
-        logger.info(f"An error occurred: {e}")
+        logger.error(f"An error occurred: {e}")
         raise
 
 
