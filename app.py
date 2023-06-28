@@ -70,6 +70,8 @@ def ingest(
     full_path: Annotated[str, Form()],
     machine_id: Annotated[str, Form()],
 ):
+    logger.info(f"Ingesting... full_path: `{full_path}`, machine_id: `{machine_id}`")
+
     s3 = boto3.resource("s3")
 
     # TODO: get from JWT

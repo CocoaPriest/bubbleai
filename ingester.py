@@ -117,6 +117,8 @@ def get_elements(file_path, content_type) -> List[Element]:
         return partition_pdf(file_path, strategy="fast")
     else:
         logger.error(f"Unknown content_type: {content_type}")
+        # See if I need to use this for .docx file:
+        # https://github.com/ankushshah89/python-docx2txt/
         raise
 
 
