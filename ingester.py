@@ -1,7 +1,9 @@
 import boto3
+from botocore.exceptions import ClientError
 import json
 import tempfile
 import os
+from ContentTypeException import ContentTypeException
 from logger import logger
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings.openai import OpenAIEmbeddings
@@ -58,20 +60,28 @@ def receive_messages_from_sqs_in_batches(queue_url):
                 bucket = content["Records"][0]["s3"]["bucket"]["name"]
                 key = content["Records"][0]["s3"]["object"]["key"]
 
-                document = load_document(bucket, key)
-                chunks = split_document(document)
-                texts = [chunk.page_content for chunk in chunks]
-                logger.info(f"chunks:\n{chunks}")
-
-                vectors = embeddings.embed_documents(texts)
-                zipped = zip(texts, vectors)
-
                 # LATER: optimize try block. AWS errors not handled
                 try:
+                    document = load_document(bucket, key)
+                    chunks = split_document(document)
+                    texts = [chunk.page_content for chunk in chunks]
+                    logger.info(f"chunks:\n{chunks}")
+
+                    vectors = embeddings.embed_documents(texts)
+                    zipped = zip(texts, vectors)
+
                     persist(zipped, document.metadata)
-                except:
-                    logger.info(f"not gonna delete SQS message")
-                else:
+                    logger.info(f"vector data persisted")
+
+                except ContentTypeException as ct:
+                    logger.error(f"ContentType error: {ct}")
+                except ClientError as ce:
+                    logger.error(f"AWS error: {ce}")
+                except psycopg.Error as pe:
+                    logger.error(f"postgres error: {pe}")
+                except Exception as e:
+                    logger.error(f"Generic error. Not gonna delete SQS message: {e}")
+                finally:
                     # Delete the message from the queue
                     sqs.delete_message(
                         QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
@@ -80,6 +90,10 @@ def receive_messages_from_sqs_in_batches(queue_url):
 
                     s3.delete_object(Bucket=bucket, Key=key)
                     logger.info(f"s3 file deleted")
+
+                    logger.info(
+                        "=========================================================================="
+                    )
 
 
 def load_document(bucket: str, key: str) -> Document:
@@ -90,23 +104,17 @@ def load_document(bucket: str, key: str) -> Document:
     with tempfile.TemporaryDirectory() as temp_dir:
         file_path = f"{temp_dir}/{key}"
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        try:
-            s3.download_file(bucket, key, file_path)
-            logger.info(f"File {key} has been downloaded successfully to {file_path}")
 
-            s3metadata = get_s3metadata(bucket, key)
-            elements = get_elements(file_path, s3metadata["content_type"])
-            text = "\n\n".join([str(el) for el in elements])
+        s3.download_file(bucket, key, file_path)
+        logger.info(f"File {key} has been downloaded successfully to {file_path}")
 
-            doc = Document(page_content=text, metadata=s3metadata)
+        s3metadata = get_s3metadata(bucket, key)
+        elements = get_elements(file_path, s3metadata["content_type"])
+        text = "\n\n".join([str(el) for el in elements])
 
-            return doc
+        doc = Document(page_content=text, metadata=s3metadata)
 
-        except Exception as e:
-            logger.error(
-                f"There was an error while downloading the file {key} from the bucket {bucket}."
-            )
-            logger.error(f"{e}")
+        return doc
 
 
 def get_elements(file_path, content_type) -> List[Element]:
@@ -119,7 +127,7 @@ def get_elements(file_path, content_type) -> List[Element]:
         logger.error(f"Unknown content_type: {content_type}")
         # See if I need to use this for .docx file:
         # https://github.com/ankushshah89/python-docx2txt/
-        raise
+        raise ContentTypeException("Unknown content_type")
 
 
 def get_s3metadata(bucket, key):
@@ -185,20 +193,16 @@ def persist(
         [metadata["machine_id"], metadata["full_path"], metadata["content_type"]],
     )
 
-    try:
-        with psycopg.connect(connection_string) as conn:
-            register_vector(conn)
+    with psycopg.connect(connection_string) as conn:
+        register_vector(conn)
 
-            # TODO: normalize: use a separate table for documents and chunks
-            # TODO: batch insert with asyncpg
-            for text, vector in zipped:
-                text = clean_null_bytes(text)
-                insert_query = "INSERT INTO documents (embedding, text, machine_id, full_path) VALUES (%s, %s, %s, %s)"
-                conn.execute(insert_query, (vector, text, machine_id, full_path))
-            conn.commit()
-    except psycopg.Error as e:
-        logger.error(f"An error occurred: {e}")
-        raise
+        # TODO: normalize: use a separate table for documents and chunks
+        # TODO: batch insert with asyncpg
+        for text, vector in zipped:
+            text = clean_null_bytes(text)
+            insert_query = "INSERT INTO documents (embedding, text, machine_id, full_path) VALUES (%s, %s, %s, %s)"
+            conn.execute(insert_query, (vector, text, machine_id, full_path))
+        conn.commit()
 
 
 def clean_null_bytes(field):
