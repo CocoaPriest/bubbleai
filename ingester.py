@@ -12,8 +12,10 @@ from dotenv import load_dotenv
 from typing import List, Tuple, Dict
 from unstructured.partition.pdf import partition_pdf
 from unstructured.documents.elements import Element
-import psycopg
-from pgvector.psycopg import register_vector
+import asyncio
+import asyncpg
+from asyncpg import exceptions
+from pgvector.asyncpg import register_vector
 
 load_dotenv()
 
@@ -22,78 +24,83 @@ os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
 os.environ["AWS_DEFAULT_REGION"] = os.getenv("aws_region")
 
-if os.environ.get("DATABASE_URL") is None:
-    connection_string = os.getenv("DATABASE_URL")
-else:
-    connection_string = os.environ["DATABASE_URL"]
-
-logger.info(f"postgres connection: {connection_string}")
-
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
 embeddings = OpenAIEmbeddings()
 
 
-def receive_messages_from_sqs_in_batches(queue_url):
-    # Implement the long polling mechanism
-    while True:
-        response = sqs.receive_message(
-            QueueUrl=queue_url,
-            AttributeNames=["All"],
-            MaxNumberOfMessages=10,
-            WaitTimeSeconds=7,  # Longer polling up to 20 seconds
-            VisibilityTimeout=15,  # Increase this as needed
-        )
+async def main():
+    queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest"
+    logger.info(f"running ingester for SQS: `{queue_url}`")
 
-        # make sure to increase the `VisibilityTimeout` parameter if my processing
-        # function might take more than 30 seconds to avoid the same message being
-        # sent to another consumer before it's deleted.
+    if os.environ.get("DATABASE_URL") is None:
+        connection_string = os.getenv("DATABASE_URL")
+    else:
+        connection_string = os.environ["DATABASE_URL"]
 
-        # Check if any messages are received
-        if "Messages" in response:
-            for message in response["Messages"]:
-                # Process the message
-                content = json.loads(message["Body"])
+    logger.info(f"postgres connection: {connection_string}")
 
-                # Get S3 object details from the S3 event
-                bucket = content["Records"][0]["s3"]["bucket"]["name"]
-                key = content["Records"][0]["s3"]["object"]["key"]
+    # pool = await asyncpg.create_pool(connection_string)
+    async with asyncpg.create_pool(connection_string) as pool:
+        # Implement the long polling mechanism
+        while True:
+            response = sqs.receive_message(
+                QueueUrl=queue_url,
+                AttributeNames=["All"],
+                MaxNumberOfMessages=10,
+                WaitTimeSeconds=7,  # Longer polling up to 20 seconds
+                VisibilityTimeout=15,  # Increase this as needed
+            )
 
-                # LATER: optimize try block. AWS errors not handled
-                try:
-                    document = load_document(bucket, key)
-                    chunks = split_document(document)
-                    texts = [chunk.page_content for chunk in chunks]
-                    logger.info(f"chunks:\n{chunks}")
+            # make sure to increase the `VisibilityTimeout` parameter if my processing
+            # function might take more than 30 seconds to avoid the same message being
+            # sent to another consumer before it's deleted.
 
-                    vectors = embeddings.embed_documents(texts)
-                    zipped = zip(texts, vectors)
+            # Check if any messages are received
+            if "Messages" in response:
+                for message in response["Messages"]:
+                    # Process the message
+                    content = json.loads(message["Body"])
 
-                    persist(zipped, document.metadata)
-                    logger.info(f"vector data persisted")
+                    # Get S3 object details from the S3 event
+                    bucket = content["Records"][0]["s3"]["bucket"]["name"]
+                    key = content["Records"][0]["s3"]["object"]["key"]
 
-                except ContentTypeException as ct:
-                    logger.error(f"ContentType error: {ct}")
-                except ClientError as ce:
-                    logger.error(f"AWS error: {ce}")
-                except psycopg.Error as pe:
-                    logger.error(f"postgres error: {pe}")
-                except Exception as e:
-                    logger.error(f"Generic error. Not gonna delete SQS message: {e}")
-                finally:
-                    # Delete the message from the queue
-                    sqs.delete_message(
-                        QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
-                    )
-                    logger.info(f"SQS message deleted")
+                    # LATER: optimize try block. AWS errors not handled
+                    try:
+                        document = load_document(bucket, key)
+                        chunks = split_document(document)
+                        texts = [chunk.page_content for chunk in chunks]
+                        vectors = embeddings.embed_documents(texts)
+                        zipped = zip(texts, vectors)
 
-                    s3.delete_object(Bucket=bucket, Key=key)
-                    logger.info(f"s3 file deleted")
+                        await persist(pool, zipped, document.metadata)
+                        logger.info("Vector data persisted")
 
-                    logger.info(
-                        "=========================================================================="
-                    )
+                    except ContentTypeException as ct:
+                        logger.error(f"ContentType error: {ct}")
+                    except ClientError as ce:
+                        logger.error(f"AWS error: {ce}")
+                    except exceptions.PostgresError as pe:
+                        logger.error(f"postgres error: {pe}")
+                    except exceptions.InterfaceError as ie:
+                        logger.error(f"asyncpg error: {ie}")
+                    except Exception as e:
+                        logger.error(f"Generic error: {e}")
+                    finally:
+                        # Delete the message from the queue
+                        sqs.delete_message(
+                            QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
+                        )
+                        logger.info("SQS message deleted")
+
+                        s3.delete_object(Bucket=bucket, Key=key)
+                        logger.info(f"s3 file deleted")
+
+                        logger.info(
+                            "=========================================================================="
+                        )
 
 
 def load_document(bucket: str, key: str) -> Document:
@@ -119,12 +126,13 @@ def load_document(bucket: str, key: str) -> Document:
 
 def get_elements(file_path, content_type) -> List[Element]:
     # not using auto, arguments: https://unstructured-io.github.io/unstructured/bricks.html
+    logger.info(f"Processing {content_type}")
     if content_type == "application/pdf":
         # TODO: try again other `strategy` values, because some documents produce bad resuls, like:
         # /Users/kostik/Documents/neu_20200122_kuendigungs-_aenderungsantrag_digital.pdf
         return partition_pdf(file_path, strategy="fast")
     else:
-        logger.error(f"Unknown content_type: {content_type}")
+        logger.error(f"Can't process document: unknown content_type `{content_type}`")
         # See if I need to use this for .docx file:
         # https://github.com/ankushshah89/python-docx2txt/
         raise ContentTypeException("Unknown content_type")
@@ -146,43 +154,12 @@ def split_document(document: Document) -> List[Document]:
     docs: List[Document] = list()
     docs = [document]
     chunks = text_splitter.split_documents(docs)
-    logger.info(f"Number of chunks: {len(chunks)}")
+    logger.info(f"Chunks: {len(chunks)}")
     return chunks
 
 
-# GPT4:
-# Your code is adding inserts into the database within the loop one by one. Since you're seeking
-# to perform a batch insert instead of a looped, one-by-one insert, you could use the `executemany`
-# command from the psycopg2 library. Here's how you might modify your code to achieve this:
-
-# ```python
-# with psycopg.connect(connection_string) as conn:
-#     register_vector(conn)
-
-#     # Prepare data for batch insert
-#     data = [(vector, text, machine_id, full_path) for text, vector in zipped]
-
-#     insert_query = """
-#         INSERT INTO documents (embedding, text, machine_id, full_path)
-#         VALUES (%s, %s, %s, %s)
-#     """
-
-#     # Execute the batch insert
-#     with conn.cursor() as cur:
-#         cur.executemany(insert_query, data)
-
-#     conn.commit()
-# ```
-
-# Here, `data` is a list of tuples where each tuple corresponds to a row to be inserted.
-# The `executemany` function is able to take this list and perform a batch insert, which can be
-# more efficient than separate insert commands.
-
-# Please note that this form of batch insertion is preferred when you're sure that your list
-# of data isn't huge.
-
-
-def persist(
+async def persist(
+    pool: asyncpg.Pool,
     zipped: List[Tuple[str, List[float]]],
     metadata: Dict[str, str],
 ):
@@ -193,16 +170,35 @@ def persist(
         [metadata["machine_id"], metadata["full_path"], metadata["content_type"]],
     )
 
-    with psycopg.connect(connection_string) as conn:
-        register_vector(conn)
+    async with pool.acquire() as conn:
+        await register_vector(conn)
+        async with conn.transaction():
+            docs_query = """INSERT INTO public.documents(machine_id, full_path)
+                            VALUES ($1, $2)
+                            ON CONFLICT (machine_id, full_path)
+                            DO UPDATE SET full_path = public.documents.full_path
+                            RETURNING id;"""
 
-        # TODO: normalize: use a separate table for documents and chunks
-        # TODO: batch insert with asyncpg
-        for text, vector in zipped:
-            text = clean_null_bytes(text)
-            insert_query = "INSERT INTO documents (embedding, text, machine_id, full_path) VALUES (%s, %s, %s, %s)"
-            conn.execute(insert_query, (vector, text, machine_id, full_path))
-        conn.commit()
+            document_id = await conn.fetchval(docs_query, machine_id, full_path)
+            logger.info(f"INSERT/UPDATE document_id: {document_id}")
+
+            # First, delete old ones
+            await conn.execute("DELETE FROM chunks WHERE document_id=$1;", document_id)
+
+            emb_query = """INSERT INTO public.chunks(document_id, embedding, text)
+            VALUES ($1, $2, $3);
+            """
+
+            # prepare & executemany for performance
+            stmt = await conn.prepare(emb_query)
+
+            entries = []
+
+            for text, vector in zipped:
+                text = clean_null_bytes(text)
+                entries.append((document_id, vector, text))
+
+            await stmt.executemany(entries)
 
 
 def clean_null_bytes(field):
@@ -212,8 +208,4 @@ def clean_null_bytes(field):
     return field.replace("\0", "")
 
 
-if __name__ == "__main__":
-    queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest"
-
-    logger.info(f"running ingester for SQS: `{queue_url}`")
-    receive_messages_from_sqs_in_batches(queue_url)
+asyncio.get_event_loop().run_until_complete(main())
