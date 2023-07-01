@@ -34,7 +34,7 @@ app.add_middleware(
 
 class ResourceToDelete(BaseModel):
     uri: str
-    machineId: str
+    machine_id: str
 
 
 def send_sqs(message) -> bool:
@@ -129,7 +129,7 @@ def ingest(
     status_code=status.HTTP_200_OK,
 )
 def remove_from_index(resource: ResourceToDelete):
-    logger.info(f"Removing uri: `{resource.uri}`, machine_id: `{resource.machineId}`")
+    logger.info(f"Removing uri: `{resource.uri}`, machine_id: `{resource.machine_id}`")
 
     resource_dict = dict(resource)
     resource_dict["action"] = "DELETE"

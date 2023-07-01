@@ -24,6 +24,8 @@ os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
 os.environ["AWS_DEFAULT_REGION"] = os.getenv("aws_region")
 
+queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest.fifo"
+
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
@@ -31,7 +33,6 @@ embeddings = OpenAIEmbeddings()
 
 
 async def main():
-    queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest"
     logger.info(f"running ingester for SQS: `{queue_url}`")
 
     if os.environ.get("DATABASE_URL") is None:
@@ -61,46 +62,58 @@ async def main():
             if "Messages" in response:
                 for message in response["Messages"]:
                     # Process the message
-                    content = json.loads(message["Body"])
+                    messageBody = json.loads(message["Body"])
+                    logger.info(f"messageBody:\n{messageBody}")
 
-                    # Get S3 object details from the S3 event
-                    bucket = content["Records"][0]["s3"]["bucket"]["name"]
-                    key = content["Records"][0]["s3"]["object"]["key"]
+                    action = messageBody["action"]
+                    if action == "DELETE":
+                        uri = messageBody["uri"]
+                        machine_id = messageBody["machine_id"]
+                        await remove_content(pool, uri, machine_id)
+                    elif action == "INGEST":
+                        # Get S3 object details from the S3 event
+                        bucket = messageBody["Records"][0]["s3"]["bucket"]["name"]
+                        key = messageBody["Records"][0]["s3"]["object"]["key"]
+                        await ingest(pool, bucket, key)
+                    else:
+                        logger.warning(f"Unknown SQS message action `{action}`")
 
-                    # LATER: optimize try block. AWS errors not handled
-                    try:
-                        document = load_document(bucket, key)
-                        chunks = split_document(document)
-                        texts = [chunk.page_content for chunk in chunks]
-                        vectors = embeddings.embed_documents(texts)
-                        zipped = zip(texts, vectors)
+                    # Delete the message from the queue
+                    sqs.delete_message(
+                        QueueUrl=queue_url,
+                        ReceiptHandle=message["ReceiptHandle"],
+                    )
+                    logger.info("SQS message deleted")
+                    logger.info(
+                        "=========================================================================="
+                    )
 
-                        await persist(pool, zipped, document.metadata)
-                        logger.info("Vector data persisted")
 
-                    except ContentTypeException as ct:
-                        logger.error(f"ContentType error: {ct}")
-                    except ClientError as ce:
-                        logger.error(f"AWS error: {ce}")
-                    except exceptions.PostgresError as pe:
-                        logger.error(f"postgres error: {pe}")
-                    except exceptions.InterfaceError as ie:
-                        logger.error(f"asyncpg error: {ie}")
-                    except Exception as e:
-                        logger.error(f"Generic error: {e}")
-                    finally:
-                        # Delete the message from the queue
-                        sqs.delete_message(
-                            QueueUrl=queue_url, ReceiptHandle=message["ReceiptHandle"]
-                        )
-                        logger.info("SQS message deleted")
+async def ingest(pool: asyncpg.Pool, bucket: str, key: str):
+    # LATER: optimize try block. AWS errors not handled
+    try:
+        document = load_document(bucket, key)
+        chunks = split_document(document)
+        texts = [chunk.page_content for chunk in chunks]
+        vectors = embeddings.embed_documents(texts)
+        zipped = zip(texts, vectors)
 
-                        s3.delete_object(Bucket=bucket, Key=key)
-                        logger.info(f"s3 file deleted")
+        await persist(pool, zipped, document.metadata)
+        logger.info("Vector data persisted")
 
-                        logger.info(
-                            "=========================================================================="
-                        )
+    except ContentTypeException as ct:
+        logger.error(f"ContentType error: {ct}")
+    except ClientError as ce:
+        logger.error(f"AWS error: {ce}")
+    except exceptions.PostgresError as pe:
+        logger.error(f"postgres error: {pe}")
+    except exceptions.InterfaceError as ie:
+        logger.error(f"asyncpg error: {ie}")
+    except Exception as e:
+        logger.error(f"Generic error: {e}")
+    finally:
+        s3.delete_object(Bucket=bucket, Key=key)
+        logger.info(f"s3 file deleted")
 
 
 def load_document(bucket: str, key: str) -> Document:
@@ -206,6 +219,16 @@ def clean_null_bytes(field):
     This function removes any null bytes from a string field. Otherwise we get an error from postgres
     """
     return field.replace("\0", "")
+
+
+async def remove_content(pool: asyncpg.Pool, uri: str, machine_id: str):
+    logger.info(f"Removing `{uri}` on `{machine_id}`")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM documents WHERE full_path=$1 AND machine_id=$2;",
+            uri,
+            machine_id,
+        )
 
 
 asyncio.get_event_loop().run_until_complete(main())
