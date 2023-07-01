@@ -8,6 +8,7 @@ from logger import logger
 import boto3
 import uuid
 import os
+import json
 
 load_dotenv()
 
@@ -16,6 +17,9 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
 os.environ["AWS_DEFAULT_REGION"] = os.getenv("aws_region")
 
 app = FastAPI(title="BubbleAI")
+
+s3 = boto3.resource("s3")
+sqs = boto3.client("sqs")
 
 origins = ["*"]
 
@@ -28,10 +32,28 @@ app.add_middleware(
 )
 
 
-class File2(BaseModel):
-    name: str
-    price: float
-    is_offer: bool | None = None
+class ResourceToDelete(BaseModel):
+    uri: str
+    machineId: str
+
+
+def send_sqs(message) -> bool:
+    # FIFO Queue URL
+    queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest.fifo"
+
+    # TODO: get from JWT
+    client_id = uuid.UUID(int=0)
+
+    logger.info(f"Sending SQS message: `{message}`")
+
+    sqs.send_message(
+        QueueUrl=queue_url,
+        MessageBody=message,
+        MessageGroupId=str(client_id),
+        MessageDeduplicationId=str(uuid.uuid4()),
+    )
+
+    return True
 
 
 @app.get("/", summary="Root")
@@ -70,9 +92,7 @@ def ingest(
     full_path: Annotated[str, Form()],
     machine_id: Annotated[str, Form()],
 ):
-    logger.info(f"Ingesting... full_path: `{full_path}`, machine_id: `{machine_id}`")
-
-    s3 = boto3.resource("s3")
+    logger.info(f"Ingesting... uri: `{full_path}`, machine_id: `{machine_id}`")
 
     # TODO: get from JWT
     client_id = uuid.UUID(int=0)
@@ -85,6 +105,15 @@ def ingest(
         ContentType=file.content_type,
         Metadata={"full_path": full_path, "machine_id": machine_id},
     )
+
+    # Send SQS manully (FIFO not supported for s3)
+    # for record in event["Records"]:
+    #     message_body = {
+    #         "s3BucketName": record["s3"]["bucket"]["name"],
+    #         "s3ObjectKey": record["s3"]["object"]["key"],
+    #     }
+    #     json.dumps(message_body)
+
     logger.info(f"s3 object created: {ret.key}")
     return {
         "file_name": file.filename,
@@ -92,3 +121,21 @@ def ingest(
         "full_path": full_path,
         "machine_id": machine_id,
     }
+
+
+@app.delete(
+    "/resource",
+    summary="Removes document from the index",
+    status_code=status.HTTP_200_OK,
+)
+def remove_from_index(resource: ResourceToDelete):
+    logger.info(f"Removing uri: `{resource.uri}`, machine_id: `{resource.machineId}`")
+
+    resource_dict = dict(resource)
+    resource_dict["action"] = "DELETE"
+
+    message = json.dumps(resource_dict)
+
+    send_sqs(message)
+
+    return resource_dict
