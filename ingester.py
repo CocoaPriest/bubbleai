@@ -72,8 +72,8 @@ async def main():
                         await remove_content(pool, uri, machine_id)
                     elif action == "INGEST":
                         # Get S3 object details from the S3 event
-                        bucket = messageBody["Records"][0]["s3"]["bucket"]["name"]
-                        key = messageBody["Records"][0]["s3"]["object"]["key"]
+                        bucket = messageBody["bucket"]
+                        key = messageBody["key"]
                         await ingest(pool, bucket, key)
                     else:
                         logger.warning(f"Unknown SQS message action `{action}`")

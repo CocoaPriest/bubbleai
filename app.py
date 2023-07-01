@@ -16,7 +16,10 @@ os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
 os.environ["AWS_DEFAULT_REGION"] = os.getenv("aws_region")
 
+s3bucket = "bubbleai.uploads"
+
 app = FastAPI(title="BubbleAI")
+
 
 s3 = boto3.resource("s3")
 sqs = boto3.client("sqs")
@@ -98,23 +101,20 @@ def ingest(
     client_id = uuid.UUID(int=0)
 
     logger.info(f"uploading file to s3: `{file.filename}`")
+    key = f"{client_id}/{uuid.uuid4()}"
 
-    ret = s3.Bucket("bubbleai.uploads").put_object(
-        Key=f"{client_id}/{uuid.uuid4()}",
+    ret = s3.Bucket(s3bucket).put_object(
+        Key=key,
         Body=file.file,
         ContentType=file.content_type,
         Metadata={"full_path": full_path, "machine_id": machine_id},
     )
 
-    # Send SQS manully (FIFO not supported for s3)
-    # for record in event["Records"]:
-    #     message_body = {
-    #         "s3BucketName": record["s3"]["bucket"]["name"],
-    #         "s3ObjectKey": record["s3"]["object"]["key"],
-    #     }
-    #     json.dumps(message_body)
-
     logger.info(f"s3 object created: {ret.key}")
+    sqs_message = {"action": "INGEST", "bucket": "bubbleai.uploads", "key": key}
+    message = json.dumps(sqs_message)
+    send_sqs(message)
+
     return {
         "file_name": file.filename,
         "content_type": file.content_type,
