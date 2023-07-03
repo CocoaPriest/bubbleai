@@ -170,13 +170,23 @@ async def ask(question: Question):
     chunks = await cosine_chunks(vector)
     # logger.info(f"chunks: {chunks}")
 
-    prompt = get_prompt(question=question.question, chunks=chunks)
-    logger.info(f"PROMPT: {prompt}")
+    user_prompt = get_user_prompt(question=question.question, chunks=chunks)
+    # logger.info(f"User prompt:\n{user_prompt}")
 
-    answer = await get_answer(prompt)
-    logger.info(f"answer: {answer}")
+    system_prompt = get_system_prompt()
+    # logger.info(f"System prompt:\n{system_prompt}")
 
-    return {"answer": answer, "chunks": chunks}
+    response = await get_answer(system_prompt, user_prompt)
+    logger.info(f"response: {response}")
+
+    finish_reason = response["finish_reason"]
+    if finish_reason == "stop":
+        answer = response["message"]["content"]
+    elif finish_reason == "function_call":
+        function_call = response["message"]["function_call"]["arguments"]
+        answer = json.loads(function_call)
+
+    return {"response": answer, "chunks": chunks}
 
 
 async def cosine_chunks(vector: List[float]):
@@ -203,12 +213,17 @@ async def cosine_chunks(vector: List[float]):
                 for chunk_id, machine_id, full_path, text in result
             ]
 
-            # jsonItems = json.dumps(items)
             return items
 
 
-def get_prompt(question: str, chunks: List[dict[str:str]]) -> str:
-    with open("prompt.txt", "r") as f:
+def get_system_prompt() -> str:
+    with open("prompts/system.txt", "r") as f:
+        template = f.read()
+    return template
+
+
+def get_user_prompt(question: str, chunks: List[dict[str:str]]) -> str:
+    with open("prompts/user.txt", "r") as f:
         template = f.read()
 
     summaries = ""
@@ -220,17 +235,37 @@ def get_prompt(question: str, chunks: List[dict[str:str]]) -> str:
     return prompt
 
 
-async def get_answer(prompt: str) -> str:
-    reposnse = await openai.ChatCompletion.acreate(
-        model="gpt-3.5-turbo-16k-0613",  # gpt-4-0613
+async def get_answer(system_prompt: str, user_prompt: str) -> any:
+    response = await openai.ChatCompletion.acreate(
+        model="gpt-4-0613",
         temperature=0,
         messages=[
-            # {"role": "system", "content": prompt},
-            {"role": "user", "content": prompt}
-            # {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."},
-            # {"role": "user", "content": "Where was it played?"}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        stream=False,
+        functions=[
+            {
+                "name": "answer_the_question",
+                "description": "Answer the question and cite the source",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "description": "Final answer to user's question",
+                        },
+                        "sources": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Array of strings that cite sources of the answer",
+                        },
+                    },
+                    "required": ["answer", "sources"],
+                },
+            }
         ],
     )
 
-    answer = reposnse.choices[0].message.content
-    return answer
+    logger.info(f"reposnse: {response}")
+    return response["choices"][0]
