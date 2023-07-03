@@ -14,9 +14,11 @@ from pgvector.asyncpg import register_vector
 from pydantic import BaseModel
 
 from logger import logger
+import openai
 
 load_dotenv()
 
+openai.api_key = os.getenv("OPENAI_API_KEY")
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
 os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("aws_access_key_id")
 os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("aws_secret_access_key")
@@ -160,20 +162,24 @@ def remove_from_index(resource: ResourceToDelete):
 
 @app.post("/ask", summary="Ask a question", status_code=status.HTTP_200_OK)
 async def ask(question: Question):
-    logger.info(f"Question: `{question.question}`")
+    # logger.info(f"Question: `{question.question}`")
 
     vector = embeddings.embed_query(question.question)
     # logger.info(f"Vector: {vector}")
 
-    chunks = await cosineChunks(vector)
-    logger.info(f"chunks: {chunks}")
+    chunks = await cosine_chunks(vector)
+    # logger.info(f"chunks: {chunks}")
 
-    # TODO: create prompt, send to OpenAI (with functions??)
+    prompt = get_prompt(question=question.question, chunks=chunks)
+    logger.info(f"PROMPT: {prompt}")
 
-    return {"answer": "FINAL ANSWER", "chunks": chunks}
+    answer = await get_answer(prompt)
+    logger.info(f"answer: {answer}")
+
+    return {"answer": answer, "chunks": chunks}
 
 
-async def cosineChunks(vector: List[float]):
+async def cosine_chunks(vector: List[float]):
     async with asyncpg.create_pool(connection_string) as pool:
         async with pool.acquire() as conn:
             await register_vector(conn)
@@ -197,5 +203,34 @@ async def cosineChunks(vector: List[float]):
                 for chunk_id, machine_id, full_path, text in result
             ]
 
-            jsonItems = json.dumps(items)
+            # jsonItems = json.dumps(items)
             return items
+
+
+def get_prompt(question: str, chunks: List[dict[str:str]]) -> str:
+    with open("prompt.txt", "r") as f:
+        template = f.read()
+
+    summaries = ""
+    for chunk in chunks:
+        summaries += "Content: " + chunk["text"] + "\n"
+        summaries += "Source: " + chunk["machine_id"] + "@" + chunk["full_path"]
+        summaries += "\n\n"
+    prompt = template.format(question=question, summaries=summaries)
+    return prompt
+
+
+async def get_answer(prompt: str) -> str:
+    reposnse = await openai.ChatCompletion.acreate(
+        model="gpt-3.5-turbo-16k-0613",  # gpt-4-0613
+        temperature=0,
+        messages=[
+            # {"role": "system", "content": prompt},
+            {"role": "user", "content": prompt}
+            # {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."},
+            # {"role": "user", "content": "Where was it played?"}
+        ],
+    )
+
+    answer = reposnse.choices[0].message.content
+    return answer
