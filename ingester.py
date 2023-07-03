@@ -1,21 +1,23 @@
-import boto3
-from botocore.exceptions import ClientError
+import asyncio
 import json
-import tempfile
 import os
+import tempfile
+from typing import Dict, List, Tuple
+
+import asyncpg
+import boto3
+from asyncpg import exceptions
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+from langchain.docstore.document import Document
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from pgvector.asyncpg import register_vector
+from unstructured.documents.elements import Element
+from unstructured.partition.pdf import partition_pdf
+
 from ContentTypeException import ContentTypeException
 from logger import logger
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.docstore.document import Document
-from dotenv import load_dotenv
-from typing import List, Tuple, Dict
-from unstructured.partition.pdf import partition_pdf
-from unstructured.documents.elements import Element
-import asyncio
-import asyncpg
-from asyncpg import exceptions
-from pgvector.asyncpg import register_vector
 
 load_dotenv()
 
@@ -42,7 +44,6 @@ async def main():
 
     logger.info(f"postgres connection: {connection_string}")
 
-    # pool = await asyncpg.create_pool(connection_string)
     async with asyncpg.create_pool(connection_string) as pool:
         # Implement the long polling mechanism
         while True:
@@ -163,7 +164,7 @@ def get_s3metadata(bucket, key):
 
 
 def split_document(document: Document) -> List[Document]:
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=20)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
     docs: List[Document] = list()
     docs = [document]
     chunks = text_splitter.split_documents(docs)
