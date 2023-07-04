@@ -160,6 +160,25 @@ def remove_from_index(resource: ResourceToDelete):
     return resource_dict
 
 
+@app.get(
+    "/is_ingester_running",
+    summary="Tells if remote ingester for this client is running",
+    status_code=status.HTTP_200_OK,
+)
+def is_ingester_running():
+    # TODO: get from JWT
+    client_id = uuid.UUID(int=0)
+
+    bucket = s3.Bucket(s3bucket)
+
+    for obj in bucket.objects.filter(Prefix=str(client_id)):
+        print(f"The folder {client_id} in the bucket {s3bucket} contains files.")
+        return {"value": True}
+
+    logger.info(f"The folder {client_id} in the bucket {s3bucket} is empty.")
+    return {"value": False}
+
+
 @app.post("/ask", summary="Ask a question", status_code=status.HTTP_200_OK)
 async def ask(question: Question):
     # logger.info(f"Question: `{question.question}`")
