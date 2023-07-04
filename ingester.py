@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 
 import asyncpg
 import boto3
+import tiktoken
 from asyncpg import exceptions
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
 embeddings = OpenAIEmbeddings()
+encoding = tiktoken.encoding_for_model("text-embedding-ada-002")
 
 
 async def main():
@@ -50,13 +52,13 @@ async def main():
             response = sqs.receive_message(
                 QueueUrl=queue_url,
                 AttributeNames=["All"],
-                MaxNumberOfMessages=10,
-                WaitTimeSeconds=7,  # Longer polling up to 20 seconds
-                VisibilityTimeout=15,  # Increase this as needed
+                MaxNumberOfMessages=5,
+                WaitTimeSeconds=20,  # Longer polling up to 20 seconds
+                VisibilityTimeout=90,  # Increase this as needed
             )
 
             # make sure to increase the `VisibilityTimeout` parameter if my processing
-            # function might take more than 30 seconds to avoid the same message being
+            # function might take more than XX seconds to avoid the same message being
             # sent to another consumer before it's deleted.
 
             # Check if any messages are received
@@ -79,12 +81,16 @@ async def main():
                     else:
                         logger.warning(f"Unknown SQS message action `{action}`")
 
-                    # Delete the message from the queue
-                    sqs.delete_message(
-                        QueueUrl=queue_url,
-                        ReceiptHandle=message["ReceiptHandle"],
-                    )
-                    logger.info("SQS message deleted")
+                    try:
+                        # Delete the message from the queue
+                        sqs.delete_message(
+                            QueueUrl=queue_url,
+                            ReceiptHandle=message["ReceiptHandle"],
+                        )
+                        logger.info("SQS message deleted")
+                    except ClientError as ce:
+                        logger.error(f"AWS delete_message error: {ce}")
+
                     logger.info(
                         "=========================================================================="
                     )
@@ -164,11 +170,15 @@ def get_s3metadata(bucket, key):
 
 
 def split_document(document: Document) -> List[Document]:
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
+    text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+        chunk_size=600, chunk_overlap=50
+    )
     docs: List[Document] = list()
     docs = [document]
     chunks = text_splitter.split_documents(docs)
-    logger.info(f"Chunks: {len(chunks)}")
+    logger.info(f"Number of chunks: {len(chunks)}")
+    chunk_lengths = [len(encoding.encode(chunk.page_content)) for chunk in chunks]
+    logger.info(f"chunk_lengths: {chunk_lengths}")
     return chunks
 
 

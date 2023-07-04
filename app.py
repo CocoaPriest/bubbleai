@@ -5,6 +5,7 @@ from typing import Annotated, List
 
 import asyncpg
 import boto3
+import openai
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +15,6 @@ from pgvector.asyncpg import register_vector
 from pydantic import BaseModel
 
 from logger import logger
-import openai
 
 load_dotenv()
 
@@ -194,26 +194,29 @@ async def cosine_chunks(vector: List[float]):
         async with pool.acquire() as conn:
             await register_vector(conn)
 
-            query = """SELECT c.id, d.machine_id, d.full_path, c.text
-                            FROM chunks AS c
-                            INNER JOIN documents AS d
-                                ON c.document_id=d.id
-                            ORDER BY c.embedding <=> $1
-                            LIMIT 5;"""
+            async with conn.transaction():
+                # await conn.execute("SET LOCAL ivfflat.probes = 10;")
 
-            result = await conn.fetch(query, vector)
+                query = """SELECT c.id, d.machine_id, d.full_path, c.text
+                                FROM chunks AS c
+                                INNER JOIN documents AS d
+                                    ON c.document_id=d.id
+                                ORDER BY c.embedding <-> $1
+                                LIMIT 10;"""
 
-            items = [
-                {
-                    "chunk_id": chunk_id,
-                    "machine_id": machine_id,
-                    "full_path": full_path,
-                    "text": text,
-                }
-                for chunk_id, machine_id, full_path, text in result
-            ]
+                result = await conn.fetch(query, vector)
 
-            return items
+                items = [
+                    {
+                        "chunk_id": chunk_id,
+                        "machine_id": machine_id,
+                        "full_path": full_path,
+                        "text": text,
+                    }
+                    for chunk_id, machine_id, full_path, text in result
+                ]
+
+                return items
 
 
 def get_system_prompt() -> str:
