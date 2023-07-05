@@ -7,12 +7,13 @@ import asyncpg
 import boto3
 import openai
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, UploadFile, status
+from fastapi import FastAPI, File, Form, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from pgvector.asyncpg import register_vector
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 from logger import logger
 
@@ -180,7 +181,7 @@ def is_ingester_running():
 
 
 @app.post("/ask", summary="Ask a question", status_code=status.HTTP_200_OK)
-async def ask(question: Question):
+async def ask(question: Question, request: Request):
     # logger.info(f"Question: `{question.question}`")
 
     vector = embeddings.embed_query(question.question)
@@ -195,7 +196,10 @@ async def ask(question: Question):
     system_prompt = get_system_prompt()
     # logger.info(f"System prompt:\n{system_prompt}")
 
-    response = await get_answer(system_prompt, user_prompt)
+    event_generator = get_answer_event_generator(request, system_prompt, user_prompt)
+    return EventSourceResponse(event_generator)
+
+    response = get_answer(system_prompt, user_prompt)
     logger.info(f"response: {response}")
 
     finish_reason = response["finish_reason"]
@@ -250,44 +254,64 @@ def get_user_prompt(question: str, chunks: List[dict[str:str]]) -> str:
 
     summaries = ""
     for chunk in chunks:
-        summaries += "Content: " + chunk["text"] + "\n"
-        summaries += "Source: " + chunk["machine_id"] + "@" + chunk["full_path"]
-        summaries += "\n\n"
+        summaries += "<CHUNK>" + chunk["text"] + "</CHUNK>\n"
+        summaries += (
+            "<SOURCE>" + chunk["machine_id"] + "@" + chunk["full_path"] + "</SOURCE>\n"
+        )
+        summaries += "\n"
     prompt = template.format(question=question, summaries=summaries)
     return prompt
 
 
-async def get_answer(system_prompt: str, user_prompt: str) -> any:
-    response = await openai.ChatCompletion.acreate(
+async def get_answer_event_generator(
+    request: Request, system_prompt: str, user_prompt: str
+):
+    response = openai.ChatCompletion.create(
         model="gpt-4-0613",
         temperature=0,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        stream=False,
-        functions=[
-            {
-                "name": "answer_the_question",
-                "description": "Answer the question and cite the source",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "answer": {
-                            "type": "string",
-                            "description": "Final answer to user's question",
-                        },
-                        "sources": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Array of strings that cite sources of the answer",
-                        },
-                    },
-                    "required": ["answer", "sources"],
-                },
-            }
-        ],
+        stream=True,
     )
 
-    logger.info(f"reposnse: {response}")
-    return response["choices"][0]
+    collected_messages = []
+    hidden_buffer1_triggered = False
+    hidden_buffer2_triggered = False
+
+    for chunk in response:
+        if await request.is_disconnected():
+            logger.warning("Request disconnected")
+            # TODO: send cancel request to OpenAI
+            return
+
+        # logger.info(f"Chunk: {chunk}")
+        chunk_message = chunk["choices"][0]["delta"]  # extract the message
+        collected_messages.append(chunk_message)  # save the message
+
+        content = chunk_message.get("content", "")
+        # logger.info(f"Content: {content}")
+
+        if content == ">>":
+            hidden_buffer1_triggered = True
+        elif hidden_buffer1_triggered == True and content == "||":
+            hidden_buffer2_triggered = True
+        elif hidden_buffer1_triggered and hidden_buffer2_triggered:
+            yield {
+                "event": "src_upd",
+                "retry": 30000,
+                "data": content,
+            }
+        else:
+            yield {
+                "event": "answ_upd",
+                "retry": 30000,
+                "data": content,
+            }
+
+    # print the time delay and text received
+    full_reply_content = "".join([m.get("content", "") for m in collected_messages])
+    logger.info(f"Full conversation received: {full_reply_content}")
+
+    yield {"event": "end", "data": ""}

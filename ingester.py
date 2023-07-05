@@ -32,6 +32,8 @@ queue_url = "https://sqs.eu-central-1.amazonaws.com/246532218018/bubble-ingest.f
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
+chunk_size = 512
+
 embeddings = OpenAIEmbeddings()
 encoding = tiktoken.encoding_for_model("text-embedding-ada-002")
 
@@ -102,7 +104,7 @@ async def ingest(pool: asyncpg.Pool, bucket: str, key: str):
         document = load_document(bucket, key)
         chunks = split_document(document)
         texts = [chunk.page_content for chunk in chunks]
-        vectors = embeddings.embed_documents(texts)
+        vectors = embeddings.embed_documents(texts, chunk_size=chunk_size)
         zipped = zip(texts, vectors)
 
         await persist(pool, zipped, document.metadata)
@@ -171,7 +173,7 @@ def get_s3metadata(bucket, key):
 
 def split_document(document: Document) -> List[Document]:
     text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        chunk_size=600, chunk_overlap=50
+        chunk_size=chunk_size, chunk_overlap=24
     )
     docs: List[Document] = list()
     docs = [document]
