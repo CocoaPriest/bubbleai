@@ -74,7 +74,11 @@ async def main():
                     if action == "DELETE":
                         uri = messageBody["uri"]
                         machine_id = messageBody["machine_id"]
-                        await remove_content(pool, uri, machine_id)
+                        is_folder = messageBody["is_folder"]
+                        if is_folder:
+                            await remove_content_foder(pool, uri, machine_id)
+                        else:
+                            await remove_content(pool, uri, machine_id)
                     elif action == "INGEST":
                         # Get S3 object details from the S3 event
                         bucket = messageBody["bucket"]
@@ -239,6 +243,16 @@ async def remove_content(pool: asyncpg.Pool, uri: str, machine_id: str):
     async with pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM documents WHERE full_path=$1 AND machine_id=$2;",
+            uri,
+            machine_id,
+        )
+
+
+async def remove_content_foder(pool: asyncpg.Pool, uri: str, machine_id: str):
+    logger.info(f"Removing folder `{uri}` on `{machine_id}`")
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM documents WHERE full_path LIKE $1 || '%' AND machine_id=$2;",
             uri,
             machine_id,
         )

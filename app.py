@@ -149,7 +149,9 @@ def ingest(
     status_code=status.HTTP_200_OK,
 )
 def remove_from_index(resource: ResourceToDelete):
-    logger.info(f"Removing uri: `{resource.uri}`, machine_id: `{resource.machine_id}`")
+    logger.info(
+        f"Removing uri: `{resource.uri}`, machine_id: `{resource.machine_id}`, is_folder: `{resource.is_folder}`"
+    )
 
     resource_dict = dict(resource)
     resource_dict["action"] = "DELETE"
@@ -198,18 +200,6 @@ async def ask(question: Question, request: Request):
 
     event_generator = get_answer_event_generator(request, system_prompt, user_prompt)
     return EventSourceResponse(event_generator)
-
-    response = get_answer(system_prompt, user_prompt)
-    logger.info(f"response: {response}")
-
-    finish_reason = response["finish_reason"]
-    if finish_reason == "stop":
-        answer = response["message"]["content"]
-    elif finish_reason == "function_call":
-        function_call = response["message"]["function_call"]["arguments"]
-        answer = json.loads(function_call)
-
-    return {"response": answer, "chunks": chunks}
 
 
 async def cosine_chunks(vector: List[float]):
