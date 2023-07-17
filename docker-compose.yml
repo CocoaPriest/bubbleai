@@ -24,6 +24,8 @@ services:
         platform: ${PLATFORM}
         ports:
             - "8000:8000"
+        environment:
+            - DATABASE_URL=postgres://konst:i2canfly_@db:5432/bubbledb
 
     ingester:
         container_name: ingester

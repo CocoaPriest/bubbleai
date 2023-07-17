@@ -6,6 +6,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 WORKDIR /app
 COPY .env .
+COPY ContentTypeException.py .
 COPY ingester.py .
 COPY logger.py .
 COPY requirements.txt .
