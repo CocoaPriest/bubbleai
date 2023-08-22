@@ -54,6 +54,7 @@ app.add_middleware(
 class ResourceToDelete(BaseModel):
     uri: str
     machine_id: str
+    is_folder: bool
 
 
 class Question(BaseModel):
