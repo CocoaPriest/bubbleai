@@ -1,6 +1,7 @@
 # BubbleAI
 
 BubbleAI is a sophisticated AI-driven platform designed to ingest, process, and analyze documents, leveraging the power of OpenAI's embeddings and a robust FastAPI backend. It's built to handle a variety of tasks, including document ingestion, text extraction, and querying for insights using advanced natural language processing techniques.
+BubbleAI serves as the backend for [AssistAI](https://github.com/CocoaPriest/AssistAI), a macOS application that utilizes its endpoints for RAG, ingestion and interference.
 
 ## Features
 
