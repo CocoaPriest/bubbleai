@@ -161,6 +161,8 @@ def remove_from_index(resource: ResourceToDelete):
 
     send_sqs(message)
 
+    
+
     return resource_dict
 
 
@@ -185,13 +187,13 @@ def is_ingester_running():
 
 @app.post("/ask", summary="Ask a question", status_code=status.HTTP_200_OK)
 async def ask(question: Question, request: Request):
-    # logger.info(f"Question: `{question.question}`")
+    logger.info(f"Question: `{question.question}`")
 
     vector = embeddings.embed_query(question.question)
     # logger.info(f"Vector: {vector}")
 
     chunks = await cosine_chunks(vector)
-    # logger.info(f"chunks: {chunks}")
+    logger.info(f"chunks: {chunks}")
 
     user_prompt = get_user_prompt(question=question.question, chunks=chunks)
     # logger.info(f"User prompt:\n{user_prompt}")
